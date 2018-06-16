@@ -17,28 +17,28 @@ class Dispatcher implements DispatcherContract
 {
     /**
      * The IoC container instance.
-     *
+     * 容器对象
      * @var \Illuminate\Contracts\Container\Container
      */
     protected $container;
 
     /**
      * The registered event listeners.
-     *
+     *  监听器
      * @var array
      */
     protected $listeners = [];
 
     /**
      * The wildcard listeners.
-     *
+     * 通配符监听器
      * @var array
      */
     protected $wildcards = [];
 
     /**
      * The cached wildcard listeners.
-     *
+     *  缓存的通配符监听器
      * @var array
      */
     protected $wildcardsCache = [];
@@ -72,6 +72,7 @@ class Dispatcher implements DispatcherContract
     {
         foreach ((array) $events as $event) {
             if (Str::contains($event, '*')) {
+                // 通配符事件
                 $this->setupWildcardListen($event, $listener);
             } else {
                 $this->listeners[$event][] = $this->makeListener($listener);
@@ -184,7 +185,7 @@ class Dispatcher implements DispatcherContract
 
     /**
      * Fire an event and call the listeners.
-     *
+     * 派发事件，调用所有的监听器
      * @param  string|object  $event
      * @param  mixed  $payload
      * @param  bool  $halt
@@ -199,6 +200,7 @@ class Dispatcher implements DispatcherContract
             $event, $payload
         );
 
+        // 广播事件
         if ($this->shouldBroadcast($payload)) {
             $this->broadcastEvent($payload[0]);
         }
@@ -206,11 +208,12 @@ class Dispatcher implements DispatcherContract
         $responses = [];
 
         foreach ($this->getListeners($event) as $listener) {
-            $response = $listener($event, $payload);
+            $response = $listener($event, $payload);// 执行监听器
 
             // If a response is returned from the listener and event halting is enabled
             // we will just return this response, and not call the rest of the event
             // listeners. Otherwise we will add the response on the response list.
+            //  如果监听器执行的返回值不为空，并且halt为true，则直接返回，后面的监听器不会执行
             if ($halt && ! is_null($response)) {
                 return $response;
             }
@@ -218,6 +221,7 @@ class Dispatcher implements DispatcherContract
             // If a boolean false is returned from a listener, we will stop propagating
             // the event to any further listeners down in the chain, else we keep on
             // looping through the listeners and firing every one in our sequence.
+            //  如果返回值为 false，则停止执行
             if ($response === false) {
                 break;
             }
@@ -225,6 +229,7 @@ class Dispatcher implements DispatcherContract
             $responses[] = $response;
         }
 
+        // 根据halt返回响应的数据
         return $halt ? null : $responses;
     }
 
@@ -288,13 +293,16 @@ class Dispatcher implements DispatcherContract
      */
     public function getListeners($eventName)
     {
+        // php7新语法，要么前面的条件成立，使用其值，否则使用后面的
         $listeners = $this->listeners[$eventName] ?? [];
 
+        // 合并普通监听器和通配符监听器
         $listeners = array_merge(
-            $listeners,
-            $this->wildcardsCache[$eventName] ?? $this->getWildcardListeners($eventName)
+            $listeners,// 普通精准监听器
+            $this->wildcardsCache[$eventName] ?? $this->getWildcardListeners($eventName) // 通配符监听器
         );
 
+        // 如果事件名称是已经加载的类名称，则获取该类实现的接口的监听器列表
         return class_exists($eventName, false)
                     ? $this->addInterfaceListeners($eventName, $listeners)
                     : $listeners;
@@ -311,11 +319,12 @@ class Dispatcher implements DispatcherContract
         $wildcards = [];
 
         foreach ($this->wildcards as $key => $listeners) {
+            // 这里采用的是正则匹配
             if (Str::is($key, $eventName)) {
                 $wildcards = array_merge($wildcards, $listeners);
             }
         }
-
+        // 由于通配符使用了正则，效率相对较低，所以这对匹配到的监听器列表做了缓存
         return $this->wildcardsCache[$eventName] = $wildcards;
     }
 
@@ -328,6 +337,7 @@ class Dispatcher implements DispatcherContract
      */
     protected function addInterfaceListeners($eventName, array $listeners = [])
     {
+        // 获取事件类实现的接口监听器列表
         foreach (class_implements($eventName) as $interface) {
             if (isset($this->listeners[$interface])) {
                 foreach ($this->listeners[$interface] as $names) {
@@ -341,7 +351,7 @@ class Dispatcher implements DispatcherContract
 
     /**
      * Register an event listener with the dispatcher.
-     *
+     * 创建一个监听器
      * @param  \Closure|string  $listener
      * @param  bool  $wildcard
      * @return \Closure
@@ -352,18 +362,22 @@ class Dispatcher implements DispatcherContract
             return $this->createClassListener($listener, $wildcard);
         }
 
+        // laravel 中大量的使用了闭包，最大的好处是可以保留定义闭包的上下文环境变量
+        // $event 事件的名称
+        // $payload 事件携带的数据
         return function ($event, $payload) use ($listener, $wildcard) {
             if ($wildcard) {
                 return $listener($event, $payload);
             }
 
+            // ... 属于php7的新语法，叫做解构
             return $listener(...array_values($payload));
         };
     }
 
     /**
      * Create a class based listener using the IoC container.
-     *
+     * 创建基于类的监听器
      * @param  string  $listener
      * @param  bool  $wildcard
      * @return \Closure
@@ -389,12 +403,14 @@ class Dispatcher implements DispatcherContract
      */
     protected function createClassCallable($listener)
     {
+        // 解析出 类和方法名
         list($class, $method) = $this->parseClassCallable($listener);
 
         if ($this->handlerShouldBeQueued($class)) {
             return $this->createQueuedHandlerCallable($class, $method);
         }
 
+        //  方法创建好的对象和方法名称
         return [$this->container->make($class), $method];
     }
 

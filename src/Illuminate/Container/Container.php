@@ -206,9 +206,9 @@ class Container implements ArrayAccess, ContainerContract
     /**
      * Register a binding with the container.
      *
-     * @param  string  $abstract
+     * @param  string  $abstract 绑定的名称
      * @param  \Closure|string|null  $concrete
-     * @param  bool  $shared
+     * @param  bool  $shared 是否共享
      * @return void
      */
     public function bind($abstract, $concrete = null, $shared = false)
@@ -216,8 +216,10 @@ class Container implements ArrayAccess, ContainerContract
         // If no concrete type was given, we will simply set the concrete type to the
         // abstract type. After that, the concrete type to be registered as shared
         // without being forced to state their classes in both of the parameters.
+        //删掉已经存在的实例
         $this->dropStaleInstances($abstract);
 
+        // 判断创建方法是否为空
         if (is_null($concrete)) {
             $concrete = $abstract;
         }
@@ -225,15 +227,21 @@ class Container implements ArrayAccess, ContainerContract
         // If the factory is not a Closure, it means it is just a class name which is
         // bound into this container to the abstract type and we will just wrap it
         // up inside its own Closure to give us more convenience when extending.
+        // 如果创建方法不是闭包则构建闭包
         if (! $concrete instanceof Closure) {
             $concrete = $this->getClosure($abstract, $concrete);
         }
 
+        // 注册信息保存起来
+        // 保留了两个数据
+        // 1. 创建绑定对象的方法
+        // 2. 创建的对象实例是否共享
         $this->bindings[$abstract] = compact('concrete', 'shared');
 
         // If the abstract type was already resolved in this container we'll fire the
         // rebound listener so that any objects which have already gotten resolved
         // can have their copy of the object updated via the listener callbacks.
+        // 如果被绑定的对像已经创建过了，则重新创建
         if ($this->resolved($abstract)) {
             $this->rebound($abstract);
         }
@@ -248,6 +256,12 @@ class Container implements ArrayAccess, ContainerContract
      */
     protected function getClosure($abstract, $concrete)
     {
+
+        // 在 laravel 中使用了大量的闭包，使用闭包的好处入下：
+        // 1. 保存闭包定义的上下文环境变量
+        // 2. 延迟执行,先定义，按需执行
+        // 3. 功能封装
+
         return function ($container, $parameters = []) use ($abstract, $concrete) {
             if ($abstract == $concrete) {
                 return $container->build($concrete);
@@ -622,8 +636,10 @@ class Container implements ArrayAccess, ContainerContract
      */
     protected function resolve($abstract, $parameters = [])
     {
+        // 获取绑定类型的名称,因为$abstract可能是别名
         $abstract = $this->getAlias($abstract);
 
+        // 确定创建对象是否需要上下文参数
         $needsContextualBuild = ! empty($parameters) || ! is_null(
             $this->getContextualConcrete($abstract)
         );
@@ -631,18 +647,23 @@ class Container implements ArrayAccess, ContainerContract
         // If an instance of the type is currently being managed as a singleton we'll
         // just return an existing instance instead of instantiating new instances
         // so the developer can keep using the same objects instance every time.
+        // 实例共享对象已经存在，并且创建对象又不需参数，就直接返回已经创建好的实例
+        // 「! $needsContextualBuild」 之所以加这个条件是因为参数不一样会导致创建的对象也不一样
         if (isset($this->instances[$abstract]) && ! $needsContextualBuild) {
             return $this->instances[$abstract];
         }
 
         $this->with[] = $parameters;
 
+        // 获取创建对象的闭包函数
         $concrete = $this->getConcrete($abstract);
 
         // We're ready to instantiate an instance of the concrete type registered for
         // the binding. This will instantiate the types, as well as resolve any of
         // its "nested" dependencies recursively until all have gotten resolved.
+        // 判断绑定是否可以创建
         if ($this->isBuildable($concrete, $abstract)) {
+            // build 主要用到的是反射相关的知识
             $object = $this->build($concrete);
         } else {
             $object = $this->make($concrete);
@@ -651,6 +672,8 @@ class Container implements ArrayAccess, ContainerContract
         // If we defined any extenders for this type, we'll need to spin through them
         // and apply them to the object being built. This allows for the extension
         // of services, such as changing configuration or decorating the object.
+
+        // 调用扩展，对创建好的对象进行相关的处理
         foreach ($this->getExtenders($abstract) as $extender) {
             $object = $extender($object, $this);
         }
@@ -658,19 +681,24 @@ class Container implements ArrayAccess, ContainerContract
         // If the requested type is registered as a singleton we'll want to cache off
         // the instances in "memory" so we can return it later without creating an
         // entirely new instance of an object on each subsequent request for it.
+        // 单例对象的处理
         if ($this->isShared($abstract) && ! $needsContextualBuild) {
             $this->instances[$abstract] = $object;
         }
 
+        // 调用设置的回掉函数
         $this->fireResolvingCallbacks($abstract, $object);
 
         // Before returning, we will also set the resolved flag to "true" and pop off
         // the parameter overrides for this build. After those two things are done
         // we will be ready to return back the fully constructed class instance.
+        // 标识为已经创建
         $this->resolved[$abstract] = true;
 
+        // 删掉保存的参数
         array_pop($this->with);
 
+        // 返回对象
         return $object;
     }
 
@@ -711,6 +739,8 @@ class Container implements ArrayAccess, ContainerContract
         // Next we need to see if a contextual binding might be bound under an alias of the
         // given abstract type. So, we will need to check if any aliases exist with this
         // type and then spin through them and check for contextual bindings on these.
+
+        // 从别名列表中查找绑定的参数
         if (empty($this->abstractAliases[$abstract])) {
             return;
         }
@@ -760,43 +790,54 @@ class Container implements ArrayAccess, ContainerContract
         // If the concrete type is actually a Closure, we will just execute it and
         // hand back the results of the functions, which allows functions to be
         // used as resolvers for more fine-tuned resolution of these objects.
+        // 使用闭包创建
+        // 闭包的第一个参数是容器对象本身 第二个参数是
         if ($concrete instanceof Closure) {
             return $concrete($this, $this->getLastParameterOverride());
         }
 
+        // 类反射对象
         $reflector = new ReflectionClass($concrete);
 
         // If the type is not instantiable, the developer is attempting to resolve
         // an abstract type such as an Interface of Abstract Class and there is
         // no binding registered for the abstractions so we need to bail out.
+        // 判断反射对象是否可实例话
         if (! $reflector->isInstantiable()) {
             return $this->notInstantiable($concrete);
         }
 
+        // 保存创建需要的 stack
         $this->buildStack[] = $concrete;
 
+        // 获取构造函数
         $constructor = $reflector->getConstructor();
 
         // If there are no constructors, that means there are no dependencies then
         // we can just resolve the instances of the objects right away, without
         // resolving any other types or dependencies out of these containers.
+        // 如果如果函数为空 则删除构建堆栈信息的最后一个元素
+        // 然后直接使用 new 创建
         if (is_null($constructor)) {
             array_pop($this->buildStack);
 
             return new $concrete;
         }
 
+        // 构造函数需要的参数对象列表
         $dependencies = $constructor->getParameters();
 
         // Once we have all the constructor's parameters we can create each of the
         // dependency instances and then use the reflection instances to make a
         // new instance of this class, injecting the created dependencies in.
+        // 获取构造函数的参数值
         $instances = $this->resolveDependencies(
             $dependencies
         );
 
-        array_pop($this->buildStack);
+        array_pop($this->buildStack);// 删掉构建堆栈信息
 
+        // 实例化对象
         return $reflector->newInstanceArgs($instances);
     }
 
@@ -824,11 +865,11 @@ class Container implements ArrayAccess, ContainerContract
             // primitive type which we can not resolve since it is not a class and
             // we will just bomb out with an error since we have no-where to go.
             $results[] = is_null($dependency->getClass())
-                            ? $this->resolvePrimitive($dependency)
-                            : $this->resolveClass($dependency);
+                            ? $this->resolvePrimitive($dependency) // 普通类型的参数
+                            : $this->resolveClass($dependency); // 对象类型的参数
         }
 
-        return $results;
+        return $results;// 返回参数
     }
 
     /**
@@ -904,6 +945,8 @@ class Container implements ArrayAccess, ContainerContract
         // is optional, and if it is we will return the optional parameter value as
         // the value of the dependency, similarly to how we do this with scalars.
         catch (BindingResolutionException $e) {
+            //  创建参数对象需要的参数实例失败
+            // 尝试使用默认值
             if ($parameter->isOptional()) {
                 return $parameter->getDefaultValue();
             }
